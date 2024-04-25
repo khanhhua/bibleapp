@@ -1,14 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
-import Prelude hiding (takeWhile)
-import System.IO (Handle, IOMode (ReadMode), hClose, hIsEOF, openFile)
 
-import Control.Monad (foldM, replicateM, replicateM_, when)
+import System.IO (BufferMode (NoBuffering), Handle, IOMode (ReadMode), hClose, hFlush, hGetChar, hIsEOF, hReady, hSetBuffering, hSetEcho, openFile, stdin, stdout, withFile)
+import Prelude hiding (takeWhile)
+
+import Control.Monad (foldM, forM_, replicateM, replicateM_, when)
 import Control.Monad.Reader (MonadIO (liftIO), MonadReader (ask), Reader, ReaderT (runReaderT), runReader)
-import Data.List (break)
+import Data.Foldable (traverse_)
+import Data.List (break, elem, intercalate, words)
 import Data.Maybe (fromJust, isJust)
-import qualified Data.Text as T (Text, breakOn, drop, length, unpack, unwords)
+import qualified Data.Text as T (Text, breakOn, drop, length, pack, unpack, unwords, words)
 import qualified Data.Text.IO.Utf8 as T (hGetLine)
 
 data Verse = Verse
@@ -25,23 +27,65 @@ data Book = Book
 type VerseReaderT = ReaderT Handle IO (Maybe Verse)
 
 main :: IO ()
-main = do
-  bookname <- putStrLn "Bookname: " >> getLine
-  mbBook <- findBook bookname 
-  when (isJust mbBook) $ do
-    let book = fromJust mbBook
-    print $ "Found: " <> show (length $ verses book)
-    print $ "Name: " <> name book
-    print $ "Verse: " <> text (head $ verses book)
+main = uiKeyinBooknames
 
-findBook :: String -> IO (Maybe Book)
-findBook bookname = do
+uiKeyinBooknames = do
+  hSetBuffering stdout NoBuffering
+  hSetBuffering stdin NoBuffering
+  hSetEcho stdin False
+
+  booknames <- listBooknames
+  traverse_
+    ( \bookname -> do
+        putStrLn bookname
+        traverse_ acceptKeystrokes bookname
+        putStrLn ""
+    )
+    booknames
+ where
+  acceptKeystrokes c = do
+    k <- getChar
+
+    if k == c
+      then putChar k >> hFlush stdout
+      else acceptKeystrokes c
+
+uiVerseSearch = do
+  term <- putStr "Term: " >> hFlush stdout >> getLine
+  verses <- findVerses term
+  let
+    total = length verses
+    top = take 5 verses
+  when (total > 0) $ do
+    putStrLn $ "Found: " <> show total
+    forM_ top (\v -> putStrLn $ addr v <> " " <> T.unpack (text v))
+    putStrLn $ show (total - 5) <> " more..."
+
+-- Composite IO utility to fetch Book names, Verses...
+
+listBooknames :: IO [String]
+listBooknames = withDataHandle selectBooknames
+
+getBook :: String -> IO (Maybe Book)
+getBook bookname = withDataHandle (selectBook bookname)
+
+findVerses :: String -> IO [Verse]
+findVerses term = withDataHandle (filterBy matchTerm)
+ where
+  matchTerm (Verse _ text) =
+    let tokens = T.words text
+     in elem (T.pack term) tokens
+
+withDataHandle :: ReaderT Handle IO a -> IO a
+withDataHandle reader = do
   hData <- openFile "data/kjv.txt" ReadMode
   replicateM_ 2 $ T.hGetLine hData
-  mbBook <- runReaderT (selectBook bookname) hData 
+  x <- runReaderT reader hData
   hClose hData
 
-  return mbBook
+  return x
+
+-- Monadic actions
 
 verseReader :: VerseReaderT
 verseReader = do
@@ -52,8 +96,8 @@ verseReader = do
     then return Nothing
     else return $ Just (parseVerse line)
 
-findAll :: (Verse -> Bool) -> ReaderT Handle IO [Verse]
-findAll predicate = reverse <$> collect []
+filterBy :: (Verse -> Bool) -> ReaderT Handle IO [Verse]
+filterBy predicate = reverse <$> collect []
  where
   collect :: [Verse] -> ReaderT Handle IO [Verse]
   collect acc = do
@@ -76,10 +120,10 @@ takeWhile predicate = reverse <$> collect False []
       Just x ->
         if predicate x
           then collect True (x : acc)
-          else if found
-            then return acc
-            else collect False acc
-
+          else
+            if found
+              then return acc
+              else collect False acc
 
 selectBook :: String -> ReaderT Handle IO (Maybe Book)
 selectBook name = do
@@ -88,10 +132,23 @@ selectBook name = do
     then return Nothing
     else return $ Just (Book name verses)
 
+selectBooknames :: ReaderT Handle IO [String]
+selectBooknames = reverse <$> collect []
+ where
+  collect acc = do
+    mbVerse <- verseReader
+    case mbVerse of
+      Nothing -> return acc
+      Just x -> do
+        let name = bookname x
+        if name `elem` acc
+          then collect acc
+          else collect (name : acc)
+
 bookname :: Verse -> String
 bookname (Verse address _) =
-  let (book, _) = break (' ' ==) address
-  in book
+  let segments = init $ words address
+   in unwords segments
 
 parseVerse :: T.Text -> Verse
 parseVerse line =
