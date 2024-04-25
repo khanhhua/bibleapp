@@ -35,24 +35,36 @@ data FingerRace = FingerRace
   }
 
 main :: IO ()
-main = uiKeyinBooknames
-
-uiKeyinBooknames = do
+main = do
   hSetBuffering stdout NoBuffering
   hSetBuffering stdin NoBuffering
-  hSetEcho stdin False
 
+  -- uiKeyinBooknames
+  uiKeyinVerse
+
+uiKeyinBooknames = do
+  hSetEcho stdin False
   booknames <- listBooknames
   result <- foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) <$> traverse gameFingerRace booknames
 
   putStrLn $ "Final rate: " <> show (fromIntegral (fst result) / fromIntegral (snd result))
- where
-  acceptKeystrokes c = do
-    k <- getChar
 
-    if k == c
-      then putChar k >> hFlush stdout
-      else acceptKeystrokes c
+uiKeyinVerse = do
+  booknames <- listBooknames
+  traverse_ putStrLn booknames
+  mbBook <- putStr "Choose a book: " >> hFlush stdout >> getLine >>= getBook
+  when (isJust mbBook) $ do
+    let book = fromJust mbBook
+    traverse_ (\v -> putStr $ verseNo v <> " ") (verses book)
+    putStrLn ""
+    chosenChapter <- putStr "Choose a chapter: " >> getLine
+
+    let
+      selectedVerses = filter (\v -> chapterNo v == chosenChapter) (verses book)
+      sentence = concatMap (words . T.unpack . text) selectedVerses
+    hSetEcho stdin False
+    result <- foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) <$> traverse gameFingerRace sentence
+    putStrLn $ "Final rate: " <> show (fromIntegral (fst result) / fromIntegral (snd result))
 
 uiVerseSearch = do
   term <- putStr "Term: " >> hFlush stdout >> getLine
@@ -183,6 +195,17 @@ bookname :: Verse -> String
 bookname (Verse address _) =
   let segments = init $ words address
    in unwords segments
+
+verseNo :: Verse -> String
+verseNo (Verse address _) =
+  last (words address)
+
+chapterNo :: Verse -> String
+chapterNo v =
+  let no = verseNo v
+   in if ':' `elem` no
+        then fst $ break (== ':') no
+        else no
 
 parseVerse :: T.Text -> Verse
 parseVerse line =
