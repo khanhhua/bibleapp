@@ -7,6 +7,8 @@ import Prelude hiding (takeWhile)
 
 import Control.Monad (foldM, forM_, replicateM, replicateM_, when)
 import Control.Monad.Reader (MonadIO (liftIO), MonadReader (ask), Reader, ReaderT (runReaderT), runReader)
+import Control.Monad.State (StateT, execStateT, get, modify)
+import Data.Either (partitionEithers)
 import Data.Foldable (traverse_)
 import Data.List (break, elem, intercalate, words)
 import Data.Maybe (fromJust, isJust)
@@ -26,6 +28,12 @@ data Book = Book
 
 type VerseReaderT = ReaderT Handle IO (Maybe Verse)
 
+data FingerRace = FingerRace
+  { sentence :: String
+  , correct :: Int
+  , strokes :: Int
+  }
+
 main :: IO ()
 main = uiKeyinBooknames
 
@@ -35,13 +43,9 @@ uiKeyinBooknames = do
   hSetEcho stdin False
 
   booknames <- listBooknames
-  traverse_
-    ( \bookname -> do
-        putStrLn bookname
-        traverse_ acceptKeystrokes bookname
-        putStrLn ""
-    )
-    booknames
+  result <- foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) <$> traverse gameFingerRace booknames
+
+  putStrLn $ "Final rate: " <> show (fromIntegral (fst result) / fromIntegral (snd result))
  where
   acceptKeystrokes c = do
     k <- getChar
@@ -60,6 +64,36 @@ uiVerseSearch = do
     putStrLn $ "Found: " <> show total
     forM_ top (\v -> putStrLn $ addr v <> " " <> T.unpack (text v))
     putStrLn $ show (total - 5) <> " more..."
+
+gameFingerRace :: String -> IO FingerRace
+gameFingerRace sentence = do
+  putStrLn sentence
+  result <- execStateT game (FingerRace sentence 0 0)
+
+  putStrLn $ "\nRate: " <> show (fromIntegral (correct result) / fromIntegral (strokes result))
+
+  return result
+ where
+  game :: StateT FingerRace IO FingerRace
+  game = do
+    pairs <- reverse <$> traverse acceptKeystrokes sentence
+    let
+      (c, s) = head pairs
+    modify (\r -> r{correct = c, strokes = s})
+    get
+
+  acceptKeystrokes :: Char -> StateT FingerRace IO (Int, Int)
+  acceptKeystrokes c = do
+    k <- liftIO getChar
+    if k == c
+      then do
+        liftIO (putChar k >> hFlush stdout)
+        modify (\r@(FingerRace _ localCorrect localStrokes) -> r{correct = localCorrect + 1, strokes = localStrokes + 1})
+        FingerRace _ updatedCorrect updatedStrokes <- get
+        return (updatedCorrect, updatedStrokes)
+      else do
+        modify (\r@(FingerRace _ _ localStrokes) -> r{strokes = localStrokes + 1})
+        acceptKeystrokes c
 
 -- Composite IO utility to fetch Book names, Verses...
 
