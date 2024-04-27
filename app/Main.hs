@@ -39,15 +39,22 @@ main = do
   hSetBuffering stdout NoBuffering
   hSetBuffering stdin NoBuffering
 
-  -- uiKeyinBooknames
-  uiKeyinVerse
+  putStrLn "1. Book names\n2. Verses in capital"
+  chosenGame <- putStr "Choose game: " >> getLine
+  case chosenGame of
+    "1" -> uiKeyinBooknames
+    "2" -> uiKeyinVerse
+    _ -> putStrLn "Invalid choice"
+  main
 
 uiKeyinBooknames = do
+  putStrLn "Enter name of the books in the Bible in correct order"
   hSetEcho stdin False
   booknames <- listBooknames
-  result <- foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) <$> traverse gameFingerRace booknames
+  result <- summarize <$> traverse gameFingerRace booknames
 
-  putStrLn $ "Final rate: " <> show (fromIntegral (fst result) / fromIntegral (snd result))
+  putStrLn $ "Final rate: " <> show result
+  hSetEcho stdin True
 
 uiKeyinVerse = do
   booknames <- listBooknames
@@ -61,10 +68,11 @@ uiKeyinVerse = do
 
     let
       selectedVerses = filter (\v -> chapterNo v == chosenChapter) (verses book)
-      sentence = concatMap (words . T.unpack . text) selectedVerses
+      sentences = map (T.unpack . text) selectedVerses
     hSetEcho stdin False
-    result <- foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) <$> traverse gameFingerRace sentence
-    putStrLn $ "Final rate: " <> show (fromIntegral (fst result) / fromIntegral (snd result))
+    result <- summarize <$> traverse (\sentence -> putStrLn sentence >> gameFingerRace sentence) sentences
+    putStrLn $ "Final rate: " <> show result
+    hSetEcho stdin True
 
 uiVerseSearch = do
   term <- putStr "Term: " >> hFlush stdout >> getLine
@@ -77,18 +85,18 @@ uiVerseSearch = do
     forM_ top (\v -> putStrLn $ addr v <> " " <> T.unpack (text v))
     putStrLn $ show (total - 5) <> " more..."
 
+summarize rows =
+  let (countCorrect, countStrokes) = foldr (\r (c, s) -> (c + correct r, s + strokes r)) (0, 0) rows
+   in countCorrect `div` countStrokes
+
 gameFingerRace :: String -> IO FingerRace
 gameFingerRace sentence = do
-  putStrLn sentence
-  result <- execStateT game (FingerRace sentence 0 0)
-
-  putStrLn $ "\nRate: " <> show (fromIntegral (correct result) / fromIntegral (strokes result))
-
-  return result
+  execStateT game (FingerRace sentence 0 0)
  where
   game :: StateT FingerRace IO FingerRace
   game = do
     pairs <- reverse <$> traverse acceptKeystrokes sentence
+    liftIO $ putStrLn ""
     let
       (c, s) = head pairs
     modify (\r -> r{correct = c, strokes = s})
